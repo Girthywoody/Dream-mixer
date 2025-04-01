@@ -25,65 +25,106 @@ const Dreammixer = () => {
   
   // State for master volume
   const [masterVolume, setMasterVolume] = useState(70);
-
-  // Refs for audio elements
+  
+  // Refs for audio elements and audio context
   const audioRefs = useRef({});
+  const audioContext = useRef(null);
+  const gainNodes = useRef({});
+  const sourceNodes = useRef({});
+  const audioInitialized = useRef(false);
 
-  // Initialize audio elements with iOS-specific handling
-  useEffect(() => {
-    // For iOS audio session initialization
-    const initIOSAudio = () => {
-      // Create temporary silent audio element to initialize audio session
-      const tempAudio = new Audio();
-      tempAudio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
-      tempAudio.play().catch(e => console.log("iOS audio init:", e));
-      tempAudio.pause();
-    };
+  // Initialize Web Audio API for better iOS compatibility
+  const initializeAudio = () => {
+    if (audioInitialized.current) return;
     
-    // Run iOS init on first touch/click anywhere
-    const handleInitialUserInteraction = () => {
-      initIOSAudio();
-      document.removeEventListener('touchstart', handleInitialUserInteraction);
-      document.removeEventListener('click', handleInitialUserInteraction);
-    };
-    
-    document.addEventListener('touchstart', handleInitialUserInteraction);
-    document.addEventListener('click', handleInitialUserInteraction);
-    
-    // Initialize audio elements for all sounds
-    soundOptions.forEach(sound => {
-      if (sound.active && sound.file) {
-        try {
+    try {
+      // Create audio context (works better on iOS than direct Audio elements)
+      audioContext.current = new (window.AudioContext || window.webkitAudioContext)();
+      
+      // For each sound, create a gain node and connect it
+      soundOptions.forEach(sound => {
+        if (sound.active && sound.file) {
+          // Create audio element
           const audio = new Audio(`/${sound.file}`);
           audio.loop = true;
-          audio.volume = 0;
+          audio.crossOrigin = "anonymous";
+          audio.preload = "auto";
           
-          // iOS specific - need to load and then set attributes
-          audio.load();
-          
-          // Store audio element in refs
+          // Store audio element
           audioRefs.current[sound.id] = audio;
-        } catch (error) {
-          console.error(`Error loading audio file ${sound.file}:`, error);
-        }
-      }
-    });
-
-    // Cleanup function to stop all sounds when component unmounts
-    return () => {
-      document.removeEventListener('touchstart', handleInitialUserInteraction);
-      document.removeEventListener('click', handleInitialUserInteraction);
-      
-      Object.values(audioRefs.current).forEach(audio => {
-        if (audio && audio.pause) {
-          audio.pause();
+          
+          // Create gain node for volume control
+          const gainNode = audioContext.current.createGain();
+          gainNode.gain.value = 0; // Start with volume at 0
+          gainNode.connect(audioContext.current.destination);
+          gainNodes.current[sound.id] = gainNode;
+          
+          // Connect audio element to gain node
+          const source = audioContext.current.createMediaElementSource(audio);
+          source.connect(gainNode);
+          sourceNodes.current[sound.id] = source;
         }
       });
+      
+      audioInitialized.current = true;
+      console.log("Audio system initialized with Web Audio API");
+    } catch (error) {
+      console.error("Failed to initialize Web Audio API:", error);
+    }
+  };
+
+  // Set up event listener for first user interaction
+  useEffect(() => {
+    const handleFirstInteraction = () => {
+      initializeAudio();
+      document.removeEventListener('touchstart', handleFirstInteraction);
+      document.removeEventListener('click', handleFirstInteraction);
+    };
+    
+    document.addEventListener('touchstart', handleFirstInteraction);
+    document.addEventListener('click', handleFirstInteraction);
+    
+    return () => {
+      document.removeEventListener('touchstart', handleFirstInteraction);
+      document.removeEventListener('click', handleFirstInteraction);
+      
+      // Cleanup
+      if (audioContext.current && audioContext.current.state !== 'closed') {
+        Object.values(audioRefs.current).forEach(audio => {
+          if (audio && audio.pause) {
+            audio.pause();
+          }
+        });
+        
+        // Close audio context
+        audioContext.current.close().catch(e => console.error("Error closing AudioContext:", e));
+      }
     };
   }, []);
 
+  // Set volume using gain node (iOS compatible)
+  const setGainNodeVolume = (id, volumePercent) => {
+    if (!audioInitialized.current) return;
+    
+    try {
+      const gainNode = gainNodes.current[id];
+      if (gainNode) {
+        // Apply individual and master volume (0-1 scale)
+        const volume = (volumePercent / 100) * (masterVolume / 100);
+        gainNode.gain.value = volume;
+        console.log(`Set ${id} gain to ${volume} (${volumePercent}% × ${masterVolume}%)`);
+      }
+    } catch (error) {
+      console.error(`Error setting gain for ${id}:`, error);
+    }
+  };
+
   // Handle sound button click (toggle on/off)
   const toggleSound = (id) => {
+    if (!audioInitialized.current) {
+      initializeAudio();
+    }
+    
     setSoundStates(prevStates => 
       prevStates.map(state => {
         if (state.id === id) {
@@ -92,14 +133,16 @@ const Dreammixer = () => {
           
           // If not playing, start at 20% volume
           if (!state.playing) {
-            // Play first, then set volume (important for iOS)
-            audio.play().catch(e => console.error("Error playing audio:", e));
+            // First play the audio
+            audio.currentTime = 0;
+            const playPromise = audio.play();
             
-            // Force small delay for iOS
-            setTimeout(() => {
-              audio.volume = 0.2 * (masterVolume / 100);
-              console.log(`Toggle: Setting ${id} volume to: ${audio.volume}`);
-            }, 10);
+            if (playPromise !== undefined) {
+              playPromise.catch(e => console.error("Error playing audio:", e));
+            }
+            
+            // Then set volume using gain node
+            setGainNodeVolume(id, 20);
             
             return {
               ...state,
@@ -111,6 +154,8 @@ const Dreammixer = () => {
           else {
             audio.pause();
             audio.currentTime = 0;
+            setGainNodeVolume(id, 0);
+            
             return {
               ...state,
               volume: 0,
@@ -125,30 +170,39 @@ const Dreammixer = () => {
 
   // Handle individual volume change
   const handleVolumeChange = (id, newVolume) => {
+    if (!audioInitialized.current) {
+      initializeAudio();
+    }
+    
     setSoundStates(prevStates => 
       prevStates.map(state => {
         if (state.id === id) {
           const audio = audioRefs.current[id];
+          
           if (audio) {
-            // iOS requires explicit audio context interaction
+            // Set volume using gain node (works on iOS)
+            setGainNodeVolume(id, newVolume);
+            
+            // Handle play/pause state
             if (newVolume > 0 && !state.playing) {
-              // If we're increasing volume from zero, need to play first
-              audio.play().catch(e => console.error("Error playing audio:", e));
-            }
-            
-            // Set volume (convert from 0-100 to 0-1) and apply master volume
-            // Force a small delay for iOS to recognize the change
-            setTimeout(() => {
-              audio.volume = (newVolume / 100) * (masterVolume / 100);
-              console.log(`Setting ${id} volume to: ${audio.volume}`);
-            }, 10);
-            
-            // If volume is 0, stop playing
-            if (newVolume === 0 && state.playing) {
-              audio.pause();
+              // Start playing if moving from zero volume
+              audio.currentTime = 0;
+              const playPromise = audio.play();
+              if (playPromise !== undefined) {
+                playPromise.catch(e => console.error("Error playing audio:", e));
+              }
+              
               return {
                 ...state,
                 volume: newVolume,
+                playing: true
+              };
+            } else if (newVolume === 0 && state.playing) {
+              // Stop playing if moving to zero volume
+              audio.pause();
+              return {
+                ...state,
+                volume: 0,
                 playing: false
               };
             }
@@ -169,19 +223,14 @@ const Dreammixer = () => {
   const handleMasterVolumeChange = (newMasterVolume) => {
     setMasterVolume(newMasterVolume);
     
-    // Apply new master volume to all playing sounds
-    // Add slight delay for iOS
-    setTimeout(() => {
-      soundStates.forEach(state => {
-        if (state.playing) {
-          const audio = audioRefs.current[state.id];
-          if (audio) {
-            audio.volume = (state.volume / 100) * (newMasterVolume / 100);
-            console.log(`Master: Setting ${state.id} volume to: ${audio.volume}`);
-          }
-        }
-      });
-    }, 10);
+    if (!audioInitialized.current) return;
+    
+    // Apply new master volume to all playing sounds using gain nodes
+    soundStates.forEach(state => {
+      if (state.playing) {
+        setGainNodeVolume(state.id, state.volume);
+      }
+    });
   };
   
   // Turn off all sounds
@@ -191,6 +240,13 @@ const Dreammixer = () => {
       if (audio && audio.pause) {
         audio.pause();
         audio.currentTime = 0;
+      }
+    });
+    
+    // Set all gain nodes to 0
+    Object.keys(gainNodes.current).forEach(id => {
+      if (gainNodes.current[id]) {
+        gainNodes.current[id].gain.value = 0;
       }
     });
     
@@ -253,23 +309,25 @@ const Dreammixer = () => {
                 <span className="text-sm text-gray-400">{volume}%</span>
               </div>
               
-              {/* Volume slider - Modified for iOS compatibility */}
+              {/* Volume slider visualization */}
               <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
                 <div 
                   className={`h-full rounded-full ${isActive ? 'bg-blue-500' : 'bg-gray-600'}`}
                   style={{ width: `${volume}%` }}
                 ></div>
               </div>
+              
+              {/* iOS compatible input slider */}
               <input
                 type="range"
                 min="0"
                 max="100"
                 value={volume}
                 onChange={(e) => handleVolumeChange(sound.id, parseInt(e.target.value))}
-                className="w-full mt-1 h-12 opacity-0 absolute -mt-6 cursor-pointer"
+                className="w-full mt-1 h-1 appearance-none bg-transparent cursor-pointer"
                 style={{
-                  WebkitAppearance: 'none',
-                  appearance: 'none'
+                  WebkitAppearance: 'slider-horizontal',
+                  accentColor: '#3B82F6'
                 }}
               />
             </div>
@@ -291,16 +349,17 @@ const Dreammixer = () => {
             ></div>
           </div>
           
+          {/* iOS compatible master volume slider */}
           <input
             type="range"
             min="0"
             max="100"
             value={masterVolume}
             onChange={(e) => handleMasterVolumeChange(parseInt(e.target.value))}
-            className="w-full mt-1 h-12 opacity-0 absolute cursor-pointer"
+            className="w-full mt-1 h-1 appearance-none bg-transparent cursor-pointer"
             style={{
-              WebkitAppearance: 'none',
-              appearance: 'none'
+              WebkitAppearance: 'slider-horizontal',
+              accentColor: '#3B82F6'
             }}
           />
           
