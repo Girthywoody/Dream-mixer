@@ -29,14 +29,37 @@ const Dreammixer = () => {
   // Refs for audio elements
   const audioRefs = useRef({});
 
-  // Initialize audio elements
+  // Initialize audio elements with iOS-specific handling
   useEffect(() => {
+    // For iOS audio session initialization
+    const initIOSAudio = () => {
+      // Create temporary silent audio element to initialize audio session
+      const tempAudio = new Audio();
+      tempAudio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+      tempAudio.play().catch(e => console.log("iOS audio init:", e));
+      tempAudio.pause();
+    };
+    
+    // Run iOS init on first touch/click anywhere
+    const handleInitialUserInteraction = () => {
+      initIOSAudio();
+      document.removeEventListener('touchstart', handleInitialUserInteraction);
+      document.removeEventListener('click', handleInitialUserInteraction);
+    };
+    
+    document.addEventListener('touchstart', handleInitialUserInteraction);
+    document.addEventListener('click', handleInitialUserInteraction);
+    
+    // Initialize audio elements for all sounds
     soundOptions.forEach(sound => {
       if (sound.active && sound.file) {
         try {
           const audio = new Audio(`/${sound.file}`);
           audio.loop = true;
           audio.volume = 0;
+          
+          // iOS specific - need to load and then set attributes
+          audio.load();
           
           // Store audio element in refs
           audioRefs.current[sound.id] = audio;
@@ -48,6 +71,9 @@ const Dreammixer = () => {
 
     // Cleanup function to stop all sounds when component unmounts
     return () => {
+      document.removeEventListener('touchstart', handleInitialUserInteraction);
+      document.removeEventListener('click', handleInitialUserInteraction);
+      
       Object.values(audioRefs.current).forEach(audio => {
         if (audio && audio.pause) {
           audio.pause();
@@ -66,8 +92,15 @@ const Dreammixer = () => {
           
           // If not playing, start at 20% volume
           if (!state.playing) {
-            audio.volume = 0.2 * (masterVolume / 100);
+            // Play first, then set volume (important for iOS)
             audio.play().catch(e => console.error("Error playing audio:", e));
+            
+            // Force small delay for iOS
+            setTimeout(() => {
+              audio.volume = 0.2 * (masterVolume / 100);
+              console.log(`Toggle: Setting ${id} volume to: ${audio.volume}`);
+            }, 10);
+            
             return {
               ...state,
               volume: 20,
@@ -97,8 +130,18 @@ const Dreammixer = () => {
         if (state.id === id) {
           const audio = audioRefs.current[id];
           if (audio) {
+            // iOS requires explicit audio context interaction
+            if (newVolume > 0 && !state.playing) {
+              // If we're increasing volume from zero, need to play first
+              audio.play().catch(e => console.error("Error playing audio:", e));
+            }
+            
             // Set volume (convert from 0-100 to 0-1) and apply master volume
-            audio.volume = (newVolume / 100) * (masterVolume / 100);
+            // Force a small delay for iOS to recognize the change
+            setTimeout(() => {
+              audio.volume = (newVolume / 100) * (masterVolume / 100);
+              console.log(`Setting ${id} volume to: ${audio.volume}`);
+            }, 10);
             
             // If volume is 0, stop playing
             if (newVolume === 0 && state.playing) {
@@ -108,11 +151,6 @@ const Dreammixer = () => {
                 volume: newVolume,
                 playing: false
               };
-            }
-            
-            // Ensure audio is playing if volume > 0
-            if (newVolume > 0 && !state.playing) {
-              audio.play().catch(e => console.error("Error playing audio:", e));
             }
           }
           
@@ -132,14 +170,18 @@ const Dreammixer = () => {
     setMasterVolume(newMasterVolume);
     
     // Apply new master volume to all playing sounds
-    soundStates.forEach(state => {
-      if (state.playing) {
-        const audio = audioRefs.current[state.id];
-        if (audio) {
-          audio.volume = (state.volume / 100) * (newMasterVolume / 100);
+    // Add slight delay for iOS
+    setTimeout(() => {
+      soundStates.forEach(state => {
+        if (state.playing) {
+          const audio = audioRefs.current[state.id];
+          if (audio) {
+            audio.volume = (state.volume / 100) * (newMasterVolume / 100);
+            console.log(`Master: Setting ${state.id} volume to: ${audio.volume}`);
+          }
         }
-      }
-    });
+      });
+    }, 10);
   };
   
   // Turn off all sounds
@@ -170,7 +212,7 @@ const Dreammixer = () => {
       {/* App Header */}
       <div className="mb-6 text-center">
         <h1 className="text-2xl md:text-3xl font-bold text-blue-400">
-            Dream Mixer
+          Dream Mixer
         </h1>
         <p className="text-blue-300 text-sm mt-1">Craft your perfect sleep soundscape</p>
       </div>
@@ -218,48 +260,18 @@ const Dreammixer = () => {
                   style={{ width: `${volume}%` }}
                 ></div>
               </div>
-              
-              {/* iOS-friendly slider setup */}
-              <div className="relative w-full mt-4 mb-2">
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={volume}
-                  onChange={(e) => handleVolumeChange(sound.id, parseInt(e.target.value))}
-                  className="w-full h-6 appearance-none bg-transparent touch-action-manipulation cursor-pointer"
-                  style={{
-                    WebkitAppearance: 'none',
-                    margin: 0,
-                    opacity: 1
-                  }}
-                />
-                
-                {/* Click targets for specific volume values */}
-                <div className="flex justify-between w-full mt-2">
-                  <button 
-                    onClick={() => handleVolumeChange(sound.id, 0)}
-                    className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
-                  >0</button>
-                  <button 
-                    onClick={() => handleVolumeChange(sound.id, 25)}
-                    className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
-                  >25</button>
-                  <button 
-                    onClick={() => handleVolumeChange(sound.id, 50)}
-                    className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
-                  >50</button>
-                  <button 
-                    onClick={() => handleVolumeChange(sound.id, 75)}
-                    className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
-                  >75</button>
-                  <button 
-                    onClick={() => handleVolumeChange(sound.id, 100)}
-                    className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
-                  >100</button>
-                </div>
-              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={volume}
+                onChange={(e) => handleVolumeChange(sound.id, parseInt(e.target.value))}
+                className="w-full mt-1 h-12 opacity-0 absolute -mt-6 cursor-pointer"
+                style={{
+                  WebkitAppearance: 'none',
+                  appearance: 'none'
+                }}
+              />
             </div>
           );
         })}
@@ -279,47 +291,18 @@ const Dreammixer = () => {
             ></div>
           </div>
           
-          {/* iOS-friendly master volume slider */}
-          <div className="relative w-full mt-4 mb-2">
-            <input
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              value={masterVolume}
-              onChange={(e) => handleMasterVolumeChange(parseInt(e.target.value))}
-              className="w-full h-6 appearance-none bg-transparent touch-action-manipulation cursor-pointer"
-              style={{
-                WebkitAppearance: 'none',
-                margin: 0,
-                opacity: 1
-              }}
-            />
-            
-            {/* Click targets for specific volume values */}
-            <div className="flex justify-between w-full mt-2">
-              <button 
-                onClick={() => handleMasterVolumeChange(0)}
-                className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
-              >0</button>
-              <button 
-                onClick={() => handleMasterVolumeChange(25)}
-                className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
-              >25</button>
-              <button 
-                onClick={() => handleMasterVolumeChange(50)}
-                className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
-              >50</button>
-              <button 
-                onClick={() => handleMasterVolumeChange(75)}
-                className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
-              >75</button>
-              <button 
-                onClick={() => handleMasterVolumeChange(100)}
-                className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
-              >100</button>
-            </div>
-          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={masterVolume}
+            onChange={(e) => handleMasterVolumeChange(parseInt(e.target.value))}
+            className="w-full mt-1 h-12 opacity-0 absolute cursor-pointer"
+            style={{
+              WebkitAppearance: 'none',
+              appearance: 'none'
+            }}
+          />
           
           {/* Control Buttons */}
           <div className="flex justify-center mt-6">
