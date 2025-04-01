@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Wind, Droplet, Flame, Leaf, Fan, Waves, Plus } from 'lucide-react';
 
 const Dreammixer = () => {
-  // List of available sounds with professional icons from lucide-react
+  // Sound options
   const soundOptions = [
     { id: 'fire', name: 'Fire', icon: <Flame size={24} />, file: 'fire.mp3', category: 'elements', active: true },
     { id: 'rain', name: 'Rain', icon: <Droplet size={24} />, file: 'rain.mp3', category: 'weather', active: true },
@@ -13,7 +13,16 @@ const Dreammixer = () => {
     { id: 'empty1', name: 'Empty', icon: <Plus size={24} />, file: '', category: 'empty', active: false }
   ];
 
-  // State to track audio elements and their volumes
+  // Audio context
+  const [audioContext, setAudioContext] = useState(null);
+  const [audioInitialized, setAudioInitialized] = useState(false);
+  
+  // Audio buffers, sources and gain nodes
+  const audioBuffers = useRef({});
+  const audioSources = useRef({});
+  const gainNodes = useRef({});
+  
+  // State for sound volumes
   const [soundStates, setSoundStates] = useState(
     soundOptions.map(sound => ({
       id: sound.id,
@@ -22,171 +31,223 @@ const Dreammixer = () => {
     }))
   );
   
-  // State for master volume
+  // Master volume state
   const [masterVolume, setMasterVolume] = useState(70);
   
-  // State to track if audio has been initialized (important for iOS)
-  const [audioInitialized, setAudioInitialized] = useState(false);
+  // Check if iOS
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
 
-  // Refs for audio elements
-  const audioRefs = useRef({});
-  
-  // Detect iOS device
-  const [isIOS, setIsIOS] = useState(false);
-  
-  useEffect(() => {
-    // Detect iOS device
-    const checkIOS = () => {
-      const userAgent = window.navigator.userAgent.toLowerCase();
-      return /iphone|ipad|ipod/.test(userAgent);
-    };
+  // Function to initialize the audio context
+  const initAudioContext = () => {
+    if (audioContext) return; // Already initialized
     
-    setIsIOS(checkIOS());
-  }, []);
-
-  // Initialize audio elements
-  useEffect(() => {
-    const initializeAudio = () => {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      const newContext = new AudioContext();
+      setAudioContext(newContext);
+      
+      // Load all sound files
       soundOptions.forEach(sound => {
         if (sound.active && sound.file) {
-          try {
-            // Create audio element
-            const audio = new Audio(`/${sound.file}`);
-            audio.loop = true;
-            audio.preload = 'auto'; // Preload audio
-            audio.volume = 0; // Start with volume at 0
-            
-            // For iOS, we need to load the audio
-            if (isIOS) {
-              audio.load();
-            }
-            
-            // Store audio element in refs
-            audioRefs.current[sound.id] = audio;
-          } catch (error) {
-            console.error(`Error loading audio file ${sound.file}:`, error);
-          }
+          loadSound(sound.id, sound.file, newContext);
         }
       });
       
       setAudioInitialized(true);
+    } catch (error) {
+      console.error("Failed to initialize audio context:", error);
+    }
+  };
+  
+  // Function to load a sound file
+  const loadSound = async (id, filename, context) => {
+    try {
+      // Fetch the audio file
+      const response = await fetch(`/${filename}`);
+      const arrayBuffer = await response.arrayBuffer();
+      
+      // Decode the audio data
+      context.decodeAudioData(
+        arrayBuffer,
+        (buffer) => {
+          // Store the decoded buffer
+          audioBuffers.current[id] = buffer;
+          
+          // Create a gain node for this sound
+          const gainNode = context.createGain();
+          gainNode.gain.value = 0; // Start with no volume
+          gainNode.connect(context.destination);
+          gainNodes.current[id] = gainNode;
+        },
+        (error) => console.error(`Error decoding ${filename}:`, error)
+      );
+    } catch (error) {
+      console.error(`Error loading sound ${filename}:`, error);
+    }
+  };
+  
+  // Function to play a sound
+  const playSound = (id) => {
+    if (!audioContext || !audioBuffers.current[id] || !gainNodes.current[id]) {
+      console.warn(`Cannot play sound ${id}: Audio not loaded`);
+      return false;
+    }
+    
+    try {
+      // If this sound is already playing, stop it first
+      if (audioSources.current[id]) {
+        stopSound(id);
+      }
+      
+      // Create a new audio source
+      const source = audioContext.createBufferSource();
+      source.buffer = audioBuffers.current[id];
+      source.loop = true;
+      
+      // Connect source to gain node (which is already connected to destination)
+      source.connect(gainNodes.current[id]);
+      
+      // Start playing
+      source.start(0);
+      
+      // Store the source
+      audioSources.current[id] = source;
+      
+      return true;
+    } catch (error) {
+      console.error(`Error playing sound ${id}:`, error);
+      return false;
+    }
+  };
+  
+  // Function to stop a sound
+  const stopSound = (id) => {
+    if (audioSources.current[id]) {
+      try {
+        // Add small fade out to avoid clicks
+        const gainNode = gainNodes.current[id];
+        if (gainNode) {
+          // Current time from audio context
+          const now = audioContext.currentTime;
+          // Schedule a short fade out over 0.1 seconds
+          gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+          gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
+        }
+        
+        // Schedule source to stop after fade out
+        setTimeout(() => {
+          try {
+            audioSources.current[id].stop();
+          } catch (e) {
+            // Source might already be stopped
+          }
+          delete audioSources.current[id];
+        }, 100);
+        
+        return true;
+      } catch (error) {
+        console.error(`Error stopping sound ${id}:`, error);
+        delete audioSources.current[id];
+        return false;
+      }
+    }
+    
+    return false;
+  };
+  
+  // Function to set volume of a sound
+  const setSoundVolume = (id, volumePercent) => {
+    if (!gainNodes.current[id] || !audioContext) {
+      return false;
+    }
+    
+    try {
+      // Calculate volume (0-1 range) based on individual and master volume
+      const calculatedVolume = (volumePercent / 100) * (masterVolume / 100);
+      
+      // Get the gain node
+      const gainNode = gainNodes.current[id];
+      
+      // Get current time from audio context
+      const now = audioContext.currentTime;
+      
+      // Set volume with a small ramp for smooth transition
+      gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+      gainNode.gain.linearRampToValueAtTime(calculatedVolume, now + 0.05);
+      
+      return true;
+    } catch (error) {
+      console.error(`Error setting volume for ${id}:`, error);
+      return false;
+    }
+  };
+
+  // Initialize audio on first user interaction
+  useEffect(() => {
+    const initAudio = () => {
+      // Try to initialize audio context
+      initAudioContext();
+      
+      // Remove event listeners once initialized
+      window.removeEventListener('click', initAudio);
+      window.removeEventListener('touchstart', initAudio);
     };
     
-    initializeAudio();
+    // Add event listeners for first interaction
+    window.addEventListener('click', initAudio);
+    window.addEventListener('touchstart', initAudio);
     
-    // Initialize iOS audio if needed
-    if (isIOS) {
-      // iOS requires user interaction to start audio
-      // This function will be called on first user interaction
-      const unlockAudio = () => {
-        // Create and play a silent audio element to unlock audio
-        const silentAudio = new Audio();
-        silentAudio.play().catch(() => {});
-        
-        // Also try to play each audio element briefly
-        Object.values(audioRefs.current).forEach(audio => {
-          if (audio) {
-            // Set volume to 0 to be silent
-            audio.volume = 0;
-            // Play audio briefly then immediately pause
-            audio.play()
-              .then(() => {
-                setTimeout(() => {
-                  audio.pause();
-                  audio.currentTime = 0;
-                }, 1);
-              })
-              .catch(() => {});
+    // Cleanup
+    return () => {
+      window.removeEventListener('click', initAudio);
+      window.removeEventListener('touchstart', initAudio);
+      
+      // Stop all sounds and close audio context
+      if (audioContext) {
+        Object.keys(audioSources.current).forEach(id => {
+          try {
+            audioSources.current[id].stop();
+          } catch (e) {
+            // Might already be stopped
           }
         });
         
-        // Remove event listeners after first interaction
-        document.removeEventListener('touchstart', unlockAudio);
-        document.removeEventListener('click', unlockAudio);
-      };
-      
-      // Add event listeners to unlock audio on first interaction
-      document.addEventListener('touchstart', unlockAudio);
-      document.addEventListener('click', unlockAudio);
-    }
-
-    // Cleanup function
-    return () => {
-      Object.values(audioRefs.current).forEach(audio => {
-        if (audio && audio.pause) {
-          audio.pause();
+        // Close audio context
+        if (audioContext.state !== 'closed') {
+          audioContext.close();
         }
-      });
-      
-      // Remove iOS specific listeners if they exist
-      if (isIOS) {
-        document.removeEventListener('touchstart', () => {});
-        document.removeEventListener('click', () => {});
       }
     };
-  }, [isIOS]);
+  }, []);
 
-  // Function to update audio volume
-  const updateVolume = (id, individualVolume) => {
-    const audio = audioRefs.current[id];
-    if (audio) {
-      // Calculate precise volume
-      let calculatedVolume = (individualVolume / 100) * (masterVolume / 100);
-      
-      // iOS often requires a higher minimum volume to be audible
-      if (isIOS && calculatedVolume > 0 && calculatedVolume < 0.1) {
-        calculatedVolume = 0.1; // Set minimum volume for iOS
-      }
-      
-      // Set the volume with a small delay for iOS
-      if (isIOS) {
-        setTimeout(() => {
-          audio.volume = calculatedVolume;
-        }, 50);
-      } else {
-        audio.volume = calculatedVolume;
-      }
-      
-      return true;
+  // Toggle sound play/stop
+  const toggleSound = async (id) => {
+    // Make sure audio is initialized
+    if (!audioContext) {
+      initAudioContext();
+      // If we're just initializing, we'll need a moment to load
+      setTimeout(() => toggleSound(id), 500);
+      return;
     }
-    return false;
-  };
-
-  // Handle sound button click (toggle on/off)
-  const toggleSound = (id) => {
-    // For iOS, we need to ensure audio is initialized
-    if (isIOS && !audioInitialized) {
-      // Try to initialize audio again
-      const audio = audioRefs.current[id];
-      if (audio) {
-        audio.load();
-        audio.play().catch(() => {});
-        audio.pause();
-      }
+    
+    // Resume audio context if suspended (needed for iOS/Chrome)
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
     }
     
     setSoundStates(prevStates => 
       prevStates.map(state => {
         if (state.id === id) {
-          const audio = audioRefs.current[id];
-          if (!audio) return state;
-          
-          // If not playing, start playing
+          // If currently not playing, start playing
           if (!state.playing) {
-            // Get volume (use current or default to 20%)
+            // Use current volume or default to the standard 20%
             const newVolume = state.volume > 0 ? state.volume : 20;
             
             // Set volume first
-            updateVolume(id, newVolume);
+            setSoundVolume(id, newVolume);
             
-            // For iOS, play with a small delay after volume is set
-            if (isIOS) {
-              setTimeout(() => {
-                audio.play().catch(e => console.error("Error playing audio:", e));
-              }, 100);
-            } else {
-              audio.play().catch(e => console.error("Error playing audio:", e));
-            }
+            // Start playback
+            playSound(id);
             
             return {
               ...state,
@@ -196,17 +257,7 @@ const Dreammixer = () => {
           } 
           // If already playing, stop
           else {
-            // For iOS, lower volume before pausing for a smoother experience
-            if (isIOS) {
-              updateVolume(id, 0);
-              setTimeout(() => {
-                audio.pause();
-                audio.currentTime = 0;
-              }, 50);
-            } else {
-              audio.pause();
-              audio.currentTime = 0;
-            }
+            stopSound(id);
             
             return {
               ...state,
@@ -225,23 +276,9 @@ const Dreammixer = () => {
     setSoundStates(prevStates => 
       prevStates.map(state => {
         if (state.id === id) {
-          const audio = audioRefs.current[id];
-          
-          // If volume is now zero, pause the audio
+          // If changing to zero, stop the sound
           if (newVolume === 0 && state.playing) {
-            if (audio) {
-              if (isIOS) {
-                // iOS: set volume to 0 first, then pause
-                updateVolume(id, 0);
-                setTimeout(() => {
-                  audio.pause();
-                  audio.currentTime = 0;
-                }, 50);
-              } else {
-                audio.pause();
-                audio.currentTime = 0;
-              }
-            }
+            stopSound(id);
             
             return {
               ...state,
@@ -250,25 +287,18 @@ const Dreammixer = () => {
             };
           }
           
-          // If volume is positive and audio exists
-          if (newVolume > 0) {
-            if (audio) {
-              // Start playing if not playing
-              if (!state.playing) {
-                updateVolume(id, newVolume);
-                
-                if (isIOS) {
-                  setTimeout(() => {
-                    audio.play().catch(e => console.error("Error playing audio:", e));
-                  }, 100);
-                } else {
-                  audio.play().catch(e => console.error("Error playing audio:", e));
-                }
-              } else {
-                // Just update volume if already playing
-                updateVolume(id, newVolume);
-              }
+          // If changing from zero to a positive value, start playing
+          if (newVolume > 0 && !state.playing) {
+            // Make sure audio context is running
+            if (audioContext && audioContext.state === 'suspended') {
+              audioContext.resume();
             }
+            
+            // Set volume
+            setSoundVolume(id, newVolume);
+            
+            // Start playing
+            playSound(id);
             
             return {
               ...state,
@@ -277,10 +307,15 @@ const Dreammixer = () => {
             };
           }
           
-          // Update volume in state
+          // If already playing, just update volume
+          if (state.playing && newVolume > 0) {
+            setSoundVolume(id, newVolume);
+          }
+          
           return {
             ...state,
-            volume: newVolume
+            volume: newVolume,
+            playing: newVolume > 0 ? true : state.playing
           };
         }
         return state;
@@ -290,48 +325,46 @@ const Dreammixer = () => {
   
   // Handle master volume change
   const handleMasterVolumeChange = (newMasterVolume) => {
-    // Set new master volume
     setMasterVolume(newMasterVolume);
     
-    // Update all playing sounds with the new master volume
+    // Update all currently playing sounds
     soundStates.forEach(state => {
       if (state.playing && state.volume > 0) {
-        updateVolume(state.id, state.volume);
+        setSoundVolume(state.id, state.volume);
       }
     });
   };
   
   // Turn off all sounds
   const turnOffAllSounds = () => {
-    // Pause all audio elements
-    Object.values(audioRefs.current).forEach(audio => {
-      if (audio && audio.pause) {
-        // For iOS, fade out before stopping
-        if (isIOS) {
-          audio.volume = 0;
-          setTimeout(() => {
-            audio.pause();
-            audio.currentTime = 0;
-          }, 50);
-        } else {
-          audio.pause();
-          audio.currentTime = 0;
-        }
-      }
+    // Stop all sounds
+    Object.keys(audioSources.current).forEach(id => {
+      stopSound(id);
     });
     
-    // Update all states to not playing
+    // Update states
     setSoundStates(prevStates => 
       prevStates.map(state => ({
         ...state,
         playing: false
-        // Keep volume settings
+        // Keep volume values
       }))
     );
   };
 
   // Count active sounds
   const activeSounds = soundStates.filter(state => state.playing).length;
+
+  // Warning message for users
+  const getStatusMessage = () => {
+    if (!audioInitialized) {
+      return "Tap any sound to initialize audio";
+    }
+    if (audioContext && audioContext.state === 'suspended') {
+      return "Audio suspended - tap any sound";
+    }
+    return null;
+  };
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4 flex flex-col">
@@ -341,9 +374,11 @@ const Dreammixer = () => {
           Dream Mixer
         </h1>
         <p className="text-blue-300 text-sm mt-1">Craft your perfect sleep soundscape</p>
-        {isIOS && (
+        
+        {/* Status message */}
+        {getStatusMessage() && (
           <p className="text-amber-400 text-xs mt-1">
-            iOS Mode: Tap any sound to initialize audio
+            {getStatusMessage()}
           </p>
         )}
       </div>
