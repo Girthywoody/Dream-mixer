@@ -74,10 +74,23 @@ const Dreammixer = () => {
       return;
     }
     
+    // Don't reload if already loaded
+    if (audioBuffers.current[id]) {
+      console.log(`Sound ${id} already loaded`);
+      return;
+    }
+    
     try {
+      console.log(`Loading sound: ${id} from ${filename}`);
+      
       // Fetch the audio file
       const response = await fetch(`/${filename}`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+      
       const arrayBuffer = await response.arrayBuffer();
+      console.log(`Sound ${id} fetched, decoding...`);
       
       // Decode the audio data
       audioContextRef.current.decodeAudioData(
@@ -92,19 +105,50 @@ const Dreammixer = () => {
           gainNode.connect(masterGainNode.current); // Connect to master gain
           gainNodes.current[id] = gainNode;
           
-          console.log(`Loaded sound: ${id}`);
+          console.log(`Successfully loaded sound: ${id}`);
+          
+          // Notify any pending play requests that this sound is now available
+          const pendingState = soundStates.find(s => s.id === id && s.volume > 0);
+          if (pendingState) {
+            console.log(`Auto-playing newly loaded sound: ${id}`);
+            setSoundVolume(id, pendingState.volume);
+            playSound(id);
+          }
         },
-        (error) => console.error(`Error decoding ${filename}:`, error)
+        (error) => {
+          console.error(`Error decoding ${filename}:`, error);
+          // Remove from buffers to allow retry
+          delete audioBuffers.current[id];
+        }
       );
     } catch (error) {
       console.error(`Error loading sound ${filename}:`, error);
+      // Remove from buffers to allow retry
+      delete audioBuffers.current[id];
     }
   };
   
   // Function to play a sound
   const playSound = (id) => {
-    if (!audioContextRef.current || !audioBuffers.current[id] || !gainNodes.current[id]) {
-      console.warn(`Cannot play sound ${id}: Audio not loaded`);
+    if (!audioContextRef.current) {
+      console.warn(`Cannot play sound ${id}: Audio context not initialized`);
+      return false;
+    }
+    
+    if (!audioBuffers.current[id]) {
+      console.warn(`Cannot play sound ${id}: Audio buffer not loaded yet`);
+      // Try to load the sound if it's not loaded
+      const soundOption = soundOptions.find(s => s.id === id);
+      if (soundOption && soundOption.file) {
+        console.log(`Attempting to load sound: ${id}`);
+        loadSound(id, soundOption.file);
+        // Return false for now, the sound will be available for the next attempt
+      }
+      return false;
+    }
+    
+    if (!gainNodes.current[id]) {
+      console.warn(`Cannot play sound ${id}: Gain node not created`);
       return false;
     }
     
@@ -287,8 +331,22 @@ const Dreammixer = () => {
     if (!audioContextRef.current) {
       initAudioContext();
       // If we're just initializing, we'll need a moment to load
-      setTimeout(() => toggleSound(id), 500);
+      setTimeout(() => toggleSound(id), 1000);
       return;
+    }
+    
+    // Check if the sound buffer is loaded
+    if (!audioBuffers.current[id]) {
+      // Find sound option
+      const soundOption = soundOptions.find(s => s.id === id);
+      if (soundOption && soundOption.file) {
+        // Show loading state
+        console.log(`Sound ${id} not loaded yet, loading now...`);
+        loadSound(id, soundOption.file);
+        // Try again in a moment
+        setTimeout(() => toggleSound(id), 1000);
+        return;
+      }
     }
     
     // Resume audio context if suspended (needed for iOS/Chrome)
@@ -351,20 +409,44 @@ const Dreammixer = () => {
           // If changing from zero to a positive value, start playing
           if (newVolume > 0 && !state.playing) {
             // Make sure audio context is running
-            if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-              audioContextRef.current.resume();
+            if (audioContextRef.current) {
+              if (audioContextRef.current.state === 'suspended') {
+                audioContextRef.current.resume();
+              }
+              
+              // Check if the sound is loaded before playing
+              if (audioBuffers.current[id]) {
+                // Set volume
+                setSoundVolume(id, newVolume);
+                
+                // Start playing
+                playSound(id);
+              } else {
+                // Find the sound option
+                const soundOption = soundOptions.find(s => s.id === id);
+                if (soundOption && soundOption.file) {
+                  // Load the sound and try playing when loaded
+                  loadSound(id, soundOption.file);
+                  console.log(`Loading sound ${id} before playing...`);
+                  
+                  // Retry after a delay
+                  setTimeout(() => {
+                    if (audioBuffers.current[id]) {
+                      setSoundVolume(id, newVolume);
+                      playSound(id);
+                      setSoundStates(states => 
+                        states.map(s => s.id === id ? {...s, playing: true} : s)
+                      );
+                    }
+                  }, 1000);
+                }
+              }
             }
-            
-            // Set volume
-            setSoundVolume(id, newVolume);
-            
-            // Start playing
-            playSound(id);
             
             return {
               ...state,
               volume: newVolume,
-              playing: true
+              playing: !!audioBuffers.current[id] // Only mark as playing if buffer exists
             };
           }
           
@@ -408,6 +490,36 @@ const Dreammixer = () => {
 
   // Count active sounds
   const activeSounds = soundStates.filter(state => state.playing).length;
+  
+  // Track loading state
+  const [isLoadingSounds, setIsLoadingSounds] = useState(false);
+  
+  // Load sounds info
+  useEffect(() => {
+    if (audioContextRef.current && audioInitialized) {
+      setIsLoadingSounds(true);
+      
+      // Pre-load all sounds
+      const loadPromises = soundOptions
+        .filter(sound => sound.active && sound.file)
+        .map(sound => {
+          if (!audioBuffers.current[sound.id]) {
+            return loadSound(sound.id, sound.file);
+          }
+          return Promise.resolve();
+        });
+      
+      Promise.all(loadPromises)
+        .then(() => {
+          console.log("All sounds pre-loaded");
+          setIsLoadingSounds(false);
+        })
+        .catch(error => {
+          console.error("Error pre-loading sounds:", error);
+          setIsLoadingSounds(false);
+        });
+    }
+  }, [audioInitialized]);
 
   // Warning message for users
   const getStatusMessage = () => {
