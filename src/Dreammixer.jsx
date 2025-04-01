@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Wind, Droplet, Flame, Leaf, Fan, Waves, Plus } from 'lucide-react';
 
-const SleepSoundMixer = () => {
+const Dreammixer = () => {
   // List of available sounds with professional icons from lucide-react
   const soundOptions = [
     { id: 'fire', name: 'Fire', icon: <Flame size={24} />, file: 'fire.mp3', category: 'elements', active: true },
@@ -109,6 +109,11 @@ const SleepSoundMixer = () => {
                 playing: false
               };
             }
+            
+            // Ensure audio is playing if volume > 0
+            if (newVolume > 0 && !state.playing) {
+              audio.play().catch(e => console.error("Error playing audio:", e));
+            }
           }
           
           return {
@@ -165,7 +170,7 @@ const SleepSoundMixer = () => {
       {/* App Header */}
       <div className="mb-6 text-center">
         <h1 className="text-2xl md:text-3xl font-bold text-blue-400">
-          Dream Mixer
+            Dream Mixer
         </h1>
         <p className="text-blue-300 text-sm mt-1">Craft your perfect sleep soundscape</p>
       </div>
@@ -206,21 +211,55 @@ const SleepSoundMixer = () => {
                 <span className="text-sm text-gray-400">{volume}%</span>
               </div>
               
-              {/* Volume slider */}
+              {/* Volume slider - Modified for iOS compatibility */}
               <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
                 <div 
                   className={`h-full rounded-full ${isActive ? 'bg-blue-500' : 'bg-gray-600'}`}
                   style={{ width: `${volume}%` }}
                 ></div>
               </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={volume}
-                onChange={(e) => handleVolumeChange(sound.id, parseInt(e.target.value))}
-                className="w-full mt-1 h-1 appearance-none bg-transparent cursor-pointer"
-              />
+              
+              {/* iOS-friendly slider setup */}
+              <div className="relative w-full mt-4 mb-2">
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={volume}
+                  onChange={(e) => handleVolumeChange(sound.id, parseInt(e.target.value))}
+                  className="w-full h-6 appearance-none bg-transparent touch-action-manipulation cursor-pointer"
+                  style={{
+                    WebkitAppearance: 'none',
+                    margin: 0,
+                    opacity: 1
+                  }}
+                />
+                
+                {/* Click targets for specific volume values */}
+                <div className="flex justify-between w-full mt-2">
+                  <button 
+                    onClick={() => handleVolumeChange(sound.id, 0)}
+                    className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
+                  >0</button>
+                  <button 
+                    onClick={() => handleVolumeChange(sound.id, 25)}
+                    className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
+                  >25</button>
+                  <button 
+                    onClick={() => handleVolumeChange(sound.id, 50)}
+                    className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
+                  >50</button>
+                  <button 
+                    onClick={() => handleVolumeChange(sound.id, 75)}
+                    className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
+                  >75</button>
+                  <button 
+                    onClick={() => handleVolumeChange(sound.id, 100)}
+                    className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
+                  >100</button>
+                </div>
+              </div>
             </div>
           );
         })}
@@ -239,14 +278,48 @@ const SleepSoundMixer = () => {
               style={{ width: `${masterVolume}%` }}
             ></div>
           </div>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={masterVolume}
-            onChange={(e) => handleMasterVolumeChange(parseInt(e.target.value))}
-            className="w-full h-1 mt-1 appearance-none bg-transparent cursor-pointer"
-          />
+          
+          {/* iOS-friendly master volume slider */}
+          <div className="relative w-full mt-4 mb-2">
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={masterVolume}
+              onChange={(e) => handleMasterVolumeChange(parseInt(e.target.value))}
+              className="w-full h-6 appearance-none bg-transparent touch-action-manipulation cursor-pointer"
+              style={{
+                WebkitAppearance: 'none',
+                margin: 0,
+                opacity: 1
+              }}
+            />
+            
+            {/* Click targets for specific volume values */}
+            <div className="flex justify-between w-full mt-2">
+              <button 
+                onClick={() => handleMasterVolumeChange(0)}
+                className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
+              >0</button>
+              <button 
+                onClick={() => handleMasterVolumeChange(25)}
+                className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
+              >25</button>
+              <button 
+                onClick={() => handleMasterVolumeChange(50)}
+                className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
+              >50</button>
+              <button 
+                onClick={() => handleMasterVolumeChange(75)}
+                className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
+              >75</button>
+              <button 
+                onClick={() => handleMasterVolumeChange(100)}
+                className="w-6 h-6 bg-gray-700 rounded-full text-xs text-center"
+              >100</button>
+            </div>
+          </div>
           
           {/* Control Buttons */}
           <div className="flex justify-center mt-6">
@@ -263,4 +336,4 @@ const SleepSoundMixer = () => {
   );
 };
 
-export default SleepSoundMixer;
+export default Dreammixer;
