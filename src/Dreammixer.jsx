@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Wind, Droplet, Flame, Leaf, Fan, Waves, Plus } from 'lucide-react';
 
-const SleepSoundMixer = () => {
+const Dreammixer = () => {
   // List of available sounds with professional icons from lucide-react
   const soundOptions = [
     { id: 'fire', name: 'Fire', icon: <Flame size={36} />, file: 'fire.mp3', category: 'elements', active: true },
@@ -276,4 +276,4 @@ const SleepSoundMixer = () => {
   );
 };
 
-export default SleepSoundMixer;
+export default Dreammixer;

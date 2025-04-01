@@ -1,10 +1,10 @@
 import React from 'react'
-import SleepSoundMixer from './SleepSoundMixer'
+import Dreammixer from './Dreammixer'
 
 function App() {
   return (
     <div className="App">
-      <SleepSoundMixer />
+      <Dreammixer />
     </div>
   )
 }
