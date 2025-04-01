@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Wind, Droplet, Flame, Leaf, Fan, Waves, Plus } from 'lucide-react';
 
-const SleepSoundMixer = () => {
+const Dreammixer = () => {
   // List of available sounds with professional icons from lucide-react
   const soundOptions = [
     { id: 'fire', name: 'Fire', icon: <Flame size={24} />, file: 'fire.mp3', category: 'elements', active: true },
@@ -29,6 +29,19 @@ const SleepSoundMixer = () => {
   // Refs for audio elements
   const audioRefs = useRef({});
 
+  // Function to set audio volume precisely
+  const setAudioVolume = (audio, volumePercent, masterVolumePercent) => {
+    if (!audio) return;
+    // Convert percentages to 0-1 range and multiply
+    const calculatedVolume = (volumePercent / 100) * (masterVolumePercent / 100);
+    
+    // Debugging - remove in production
+    console.log(`Setting volume: ${volumePercent}% × ${masterVolumePercent}% = ${calculatedVolume}`);
+    
+    // Actually set the volume on the audio element
+    audio.volume = calculatedVolume;
+  };
+
   // Initialize audio elements
   useEffect(() => {
     soundOptions.forEach(sound => {
@@ -36,7 +49,7 @@ const SleepSoundMixer = () => {
         try {
           const audio = new Audio(`/${sound.file}`);
           audio.loop = true;
-          audio.volume = 0;
+          audio.volume = 0; // Start with volume at zero
           
           // Store audio element in refs
           audioRefs.current[sound.id] = audio;
@@ -56,17 +69,6 @@ const SleepSoundMixer = () => {
     };
   }, []);
 
-  // Update actual audio volume based on individual and master volume
-  const updateAudioVolume = (id, individualVolume) => {
-    const audio = audioRefs.current[id];
-    if (audio) {
-      // Set precise volume (convert from 0-100 to 0-1) and apply master volume
-      audio.volume = (individualVolume / 100) * (masterVolume / 100);
-      return true;
-    }
-    return false;
-  };
-
   // Handle sound button click (toggle on/off)
   const toggleSound = (id) => {
     setSoundStates(prevStates => 
@@ -75,31 +77,31 @@ const SleepSoundMixer = () => {
           const audio = audioRefs.current[id];
           if (!audio) return state;
           
-          // If not playing, use current volume slider value (or default to 20%)
+          // If not playing, start playing
           if (!state.playing) {
-            // Use current volume value if it's above 0, otherwise set to 20%
-            const newVolume = state.volume > 0 ? state.volume : 20;
+            // Get current volume from slider or default to 20
+            const currentVolume = state.volume > 0 ? state.volume : 20;
             
-            // Set the audio volume according to the slider and master volume
-            updateAudioVolume(id, newVolume);
+            // First set the volume properly before playing
+            setAudioVolume(audio, currentVolume, masterVolume);
             
-            // Start playing
+            // Then play the audio
             audio.play().catch(e => console.error("Error playing audio:", e));
             
             return {
               ...state,
-              volume: newVolume,
+              volume: currentVolume,
               playing: true
             };
           } 
-          // If already playing, stop and keep volume at current value for when user plays again
+          // If already playing, stop
           else {
             audio.pause();
             audio.currentTime = 0;
             return {
               ...state,
               playing: false
-              // Keep volume at current value for when user plays again
+              // Keep volume at current setting
             };
           }
         }
@@ -113,30 +115,40 @@ const SleepSoundMixer = () => {
     setSoundStates(prevStates => 
       prevStates.map(state => {
         if (state.id === id) {
-          const isPlaying = newVolume > 0;
           const audio = audioRefs.current[id];
           
-          // Update physical audio volume if element exists
-          if (audio) {
-            // If volume is changing from 0 to some value, we need to start playing
-            if (newVolume > 0 && !state.playing) {
-              updateAudioVolume(id, newVolume);
-              audio.play().catch(e => console.error("Error playing audio:", e));
-            } 
-            // If volume is changing to 0, pause the audio
-            else if (newVolume === 0 && state.playing) {
+          // If volume is now zero, pause the audio
+          if (newVolume === 0 && state.playing) {
+            if (audio) {
               audio.pause();
+              audio.currentTime = 0;
             }
-            // Otherwise just update the volume
-            else if (state.playing) {
-              updateAudioVolume(id, newVolume);
+            return {
+              ...state,
+              volume: 0,
+              playing: false
+            };
+          }
+          
+          // If we have a valid volume and the audio exists
+          if (newVolume > 0 && audio) {
+            // If it was previously not playing or at zero, start playing
+            if (!state.playing) {
+              // Set volume first
+              setAudioVolume(audio, newVolume, masterVolume);
+              // Then play
+              audio.play().catch(e => console.error("Error playing audio:", e));
+            } else {
+              // Just update the volume
+              setAudioVolume(audio, newVolume, masterVolume);
             }
           }
           
+          // Return updated state
           return {
             ...state,
             volume: newVolume,
-            playing: isPlaying
+            playing: newVolume > 0
           };
         }
         return state;
@@ -146,14 +158,18 @@ const SleepSoundMixer = () => {
   
   // Handle master volume change
   const handleMasterVolumeChange = (newMasterVolume) => {
-    setMasterVolume(newMasterVolume);
-    
-    // Apply new master volume to all playing sounds
+    // Update all currently playing sounds with the new master volume
     soundStates.forEach(state => {
       if (state.playing) {
-        updateAudioVolume(state.id, state.volume);
+        const audio = audioRefs.current[state.id];
+        if (audio) {
+          setAudioVolume(audio, state.volume, newMasterVolume);
+        }
       }
     });
+    
+    // Update master volume state
+    setMasterVolume(newMasterVolume);
   };
   
   // Turn off all sounds
@@ -166,12 +182,12 @@ const SleepSoundMixer = () => {
       }
     });
     
-    // Update all states to not playing, but maintain their volume settings
+    // Update all states to not playing
     setSoundStates(prevStates => 
       prevStates.map(state => ({
         ...state,
         playing: false
-        // Keep the volume value so when toggled back on it uses the same value
+        // Keep volume values so user settings are preserved
       }))
     );
   };
@@ -282,4 +298,4 @@ const SleepSoundMixer = () => {
   );
 };
 
-export default SleepSoundMixer;
+export default Dreammixer;
