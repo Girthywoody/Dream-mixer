@@ -38,14 +38,64 @@ const Dreammixer = () => {
   // Check if iOS
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
 
-  // Function to initialize the audio context
+  // Function to initialize the audio context - with iOS special handling
   const initAudioContext = () => {
-    if (audioContextRef.current) return; // Already initialized
+    if (audioContextRef.current) {
+      // If we already have an audio context but it's suspended, try to resume it
+      if (audioContextRef.current.state === 'suspended') {
+        console.log("Attempting to resume suspended audio context");
+        audioContextRef.current.resume().then(() => {
+          console.log("Audio context resumed successfully");
+        }).catch(err => {
+          console.error("Failed to resume audio context:", err);
+        });
+      }
+      return; // Already initialized
+    }
     
     try {
+      console.log("Creating new AudioContext");
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       const newContext = new AudioContext();
       audioContextRef.current = newContext;
+      
+      // Log the initial state
+      console.log(`Audio context created with initial state: ${newContext.state}`);
+      
+      // For iOS, we need to handle the 'interrupted' state
+      if (isIOS) {
+        // Create a simple "unlock" function to ensure audio works on iOS
+        const unlockiOSAudio = async () => {
+          console.log("Unlocking iOS audio...");
+          if (newContext.state === 'suspended') {
+            try {
+              await newContext.resume();
+              console.log("iOS audio context resumed");
+              
+              // Create and play a silent buffer
+              const silentBuffer = newContext.createBuffer(1, 1, 22050);
+              const source = newContext.createBufferSource();
+              source.buffer = silentBuffer;
+              source.connect(newContext.destination);
+              source.start(0);
+              console.log("iOS silent buffer played");
+            } catch (e) {
+              console.error("iOS audio unlock failed:", e);
+            }
+          }
+        };
+        
+        // Try to unlock immediately
+        unlockiOSAudio();
+        
+        // Also add event listeners for iOS audio session interruptions
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') {
+            console.log("App became visible, checking audio context");
+            unlockiOSAudio();
+          }
+        });
+      }
       
       // Create master gain node
       const masterGain = newContext.createGain();
@@ -270,33 +320,53 @@ const Dreammixer = () => {
     }
   };
 
-  // Initialize audio on first user interaction
+  // Initialize audio on first user interaction - with special iOS handling
   useEffect(() => {
-    const initAudio = () => {
+    const initAudio = async () => {
+      console.log("User interaction detected, initializing audio...");
+      
+      // For iOS, we need special handling
+      if (isIOS) {
+        console.log("iOS device detected, using special handling");
+        
+        // Create a silent audio buffer
+        if (audioContextRef.current) {
+          try {
+            // Resume the audio context first
+            await audioContextRef.current.resume();
+            
+            // Create a silent buffer
+            const silentBuffer = audioContextRef.current.createBuffer(1, 1, 22050);
+            const source = audioContextRef.current.createBufferSource();
+            source.buffer = silentBuffer;
+            source.connect(audioContextRef.current.destination);
+            source.start(0);
+            console.log("iOS silent buffer played successfully");
+          } catch (e) {
+            console.error("Error during iOS audio unlock:", e);
+          }
+        }
+      }
+      
       // Try to initialize audio context
       initAudioContext();
       
       // Remove event listeners once initialized
       window.removeEventListener('click', initAudio);
       window.removeEventListener('touchstart', initAudio);
+      window.removeEventListener('touchend', initAudio);
     };
     
     // Add event listeners for first interaction
     window.addEventListener('click', initAudio);
     window.addEventListener('touchstart', initAudio);
-    
-    // For iOS, we need an additional check
-    if (isIOS) {
-      window.addEventListener('touchend', initAudio);
-    }
+    window.addEventListener('touchend', initAudio);
     
     // Cleanup
     return () => {
       window.removeEventListener('click', initAudio);
       window.removeEventListener('touchstart', initAudio);
-      if (isIOS) {
-        window.removeEventListener('touchend', initAudio);
-      }
+      window.removeEventListener('touchend', initAudio);
       
       // Stop all sounds and close audio context
       if (audioContextRef.current) {
@@ -351,7 +421,23 @@ const Dreammixer = () => {
     
     // Resume audio context if suspended (needed for iOS/Chrome)
     if (audioContextRef.current.state === 'suspended') {
-      await audioContextRef.current.resume();
+      console.log("Resuming suspended audio context before playing...");
+      try {
+        await audioContextRef.current.resume();
+        console.log("Audio context resumed successfully");
+        
+        // For iOS, play a silent sound to fully unlock audio
+        if (isIOS) {
+          console.log("Playing silent buffer for iOS");
+          const silentBuffer = audioContextRef.current.createBuffer(1, 1, 22050);
+          const source = audioContextRef.current.createBufferSource();
+          source.buffer = silentBuffer;
+          source.connect(audioContextRef.current.destination);
+          source.start(0);
+        }
+      } catch (error) {
+        console.error("Failed to resume audio context:", error);
+      }
     }
     
     setSoundStates(prevStates => 
@@ -528,6 +614,12 @@ const Dreammixer = () => {
     }
     if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
       return "Audio suspended - tap any sound";
+    }
+    if (isIOS) {
+      return "On iOS, tap Play then adjust volume";
+    }
+    if (isLoadingSounds) {
+      return "Loading sounds, please wait...";
     }
     return null;
   };
