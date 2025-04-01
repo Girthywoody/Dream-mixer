@@ -13,14 +13,15 @@ const Dreammixer = () => {
     { id: 'empty1', name: 'Empty', icon: <Plus size={24} />, file: '', category: 'empty', active: false }
   ];
 
-  // Audio context
-  const [audioContext, setAudioContext] = useState(null);
+  // Audio context reference - keeping it in a ref to avoid recreation
+  const audioContextRef = useRef(null);
   const [audioInitialized, setAudioInitialized] = useState(false);
   
   // Audio buffers, sources and gain nodes
   const audioBuffers = useRef({});
   const audioSources = useRef({});
   const gainNodes = useRef({});
+  const masterGainNode = useRef(null);
   
   // State for sound volumes
   const [soundStates, setSoundStates] = useState(
@@ -39,45 +40,59 @@ const Dreammixer = () => {
 
   // Function to initialize the audio context
   const initAudioContext = () => {
-    if (audioContext) return; // Already initialized
+    if (audioContextRef.current) return; // Already initialized
     
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       const newContext = new AudioContext();
-      setAudioContext(newContext);
+      audioContextRef.current = newContext;
+      
+      // Create master gain node
+      const masterGain = newContext.createGain();
+      masterGain.gain.value = masterVolume / 100;
+      masterGain.connect(newContext.destination);
+      masterGainNode.current = masterGain;
       
       // Load all sound files
       soundOptions.forEach(sound => {
         if (sound.active && sound.file) {
-          loadSound(sound.id, sound.file, newContext);
+          loadSound(sound.id, sound.file);
         }
       });
       
       setAudioInitialized(true);
+      console.log("Audio context initialized successfully");
     } catch (error) {
       console.error("Failed to initialize audio context:", error);
     }
   };
   
   // Function to load a sound file
-  const loadSound = async (id, filename, context) => {
+  const loadSound = async (id, filename) => {
+    if (!audioContextRef.current) {
+      console.error("Cannot load sound - audio context not initialized");
+      return;
+    }
+    
     try {
       // Fetch the audio file
       const response = await fetch(`/${filename}`);
       const arrayBuffer = await response.arrayBuffer();
       
       // Decode the audio data
-      context.decodeAudioData(
+      audioContextRef.current.decodeAudioData(
         arrayBuffer,
         (buffer) => {
           // Store the decoded buffer
           audioBuffers.current[id] = buffer;
           
           // Create a gain node for this sound
-          const gainNode = context.createGain();
+          const gainNode = audioContextRef.current.createGain();
           gainNode.gain.value = 0; // Start with no volume
-          gainNode.connect(context.destination);
+          gainNode.connect(masterGainNode.current); // Connect to master gain
           gainNodes.current[id] = gainNode;
+          
+          console.log(`Loaded sound: ${id}`);
         },
         (error) => console.error(`Error decoding ${filename}:`, error)
       );
@@ -88,7 +103,7 @@ const Dreammixer = () => {
   
   // Function to play a sound
   const playSound = (id) => {
-    if (!audioContext || !audioBuffers.current[id] || !gainNodes.current[id]) {
+    if (!audioContextRef.current || !audioBuffers.current[id] || !gainNodes.current[id]) {
       console.warn(`Cannot play sound ${id}: Audio not loaded`);
       return false;
     }
@@ -100,11 +115,11 @@ const Dreammixer = () => {
       }
       
       // Create a new audio source
-      const source = audioContext.createBufferSource();
+      const source = audioContextRef.current.createBufferSource();
       source.buffer = audioBuffers.current[id];
       source.loop = true;
       
-      // Connect source to gain node (which is already connected to destination)
+      // Connect source to gain node (which is connected to master gain)
       source.connect(gainNodes.current[id]);
       
       // Start playing
@@ -112,6 +127,7 @@ const Dreammixer = () => {
       
       // Store the source
       audioSources.current[id] = source;
+      console.log(`Started playing: ${id}`);
       
       return true;
     } catch (error) {
@@ -128,7 +144,7 @@ const Dreammixer = () => {
         const gainNode = gainNodes.current[id];
         if (gainNode) {
           // Current time from audio context
-          const now = audioContext.currentTime;
+          const now = audioContextRef.current.currentTime;
           // Schedule a short fade out over 0.1 seconds
           gainNode.gain.setValueAtTime(gainNode.gain.value, now);
           gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
@@ -137,11 +153,15 @@ const Dreammixer = () => {
         // Schedule source to stop after fade out
         setTimeout(() => {
           try {
-            audioSources.current[id].stop();
+            if (audioSources.current[id]) {
+              audioSources.current[id].stop();
+              delete audioSources.current[id];
+            }
           } catch (e) {
             // Source might already be stopped
+            console.warn(`Error stopping sound ${id}:`, e);
+            delete audioSources.current[id];
           }
-          delete audioSources.current[id];
         }, 100);
         
         return true;
@@ -157,19 +177,19 @@ const Dreammixer = () => {
   
   // Function to set volume of a sound
   const setSoundVolume = (id, volumePercent) => {
-    if (!gainNodes.current[id] || !audioContext) {
+    if (!gainNodes.current[id] || !audioContextRef.current) {
       return false;
     }
     
     try {
-      // Calculate volume (0-1 range) based on individual and master volume
-      const calculatedVolume = (volumePercent / 100) * (masterVolume / 100);
+      // Calculate volume (0-1 range) based on individual volume
+      const calculatedVolume = volumePercent / 100;
       
       // Get the gain node
       const gainNode = gainNodes.current[id];
       
       // Get current time from audio context
-      const now = audioContext.currentTime;
+      const now = audioContextRef.current.currentTime;
       
       // Set volume with a small ramp for smooth transition
       gainNode.gain.setValueAtTime(gainNode.gain.value, now);
@@ -178,6 +198,30 @@ const Dreammixer = () => {
       return true;
     } catch (error) {
       console.error(`Error setting volume for ${id}:`, error);
+      return false;
+    }
+  };
+
+  // Update master volume
+  const updateMasterVolume = (volumePercent) => {
+    if (!masterGainNode.current || !audioContextRef.current) {
+      return false;
+    }
+    
+    try {
+      // Calculate volume (0-1 range)
+      const calculatedVolume = volumePercent / 100;
+      
+      // Get current time from audio context
+      const now = audioContextRef.current.currentTime;
+      
+      // Set master volume with a small ramp for smooth transition
+      masterGainNode.current.gain.setValueAtTime(masterGainNode.current.gain.value, now);
+      masterGainNode.current.gain.linearRampToValueAtTime(calculatedVolume, now + 0.05);
+      
+      return true;
+    } catch (error) {
+      console.error("Error setting master volume:", error);
       return false;
     }
   };
@@ -197,33 +241,50 @@ const Dreammixer = () => {
     window.addEventListener('click', initAudio);
     window.addEventListener('touchstart', initAudio);
     
+    // For iOS, we need an additional check
+    if (isIOS) {
+      window.addEventListener('touchend', initAudio);
+    }
+    
     // Cleanup
     return () => {
       window.removeEventListener('click', initAudio);
       window.removeEventListener('touchstart', initAudio);
+      if (isIOS) {
+        window.removeEventListener('touchend', initAudio);
+      }
       
       // Stop all sounds and close audio context
-      if (audioContext) {
+      if (audioContextRef.current) {
         Object.keys(audioSources.current).forEach(id => {
           try {
-            audioSources.current[id].stop();
+            if (audioSources.current[id]) {
+              audioSources.current[id].stop();
+            }
           } catch (e) {
             // Might already be stopped
           }
         });
         
         // Close audio context
-        if (audioContext.state !== 'closed') {
-          audioContext.close();
+        if (audioContextRef.current.state !== 'closed') {
+          audioContextRef.current.close();
         }
       }
     };
-  }, []);
+  }, [isIOS]);
+
+  // Update master volume effect
+  useEffect(() => {
+    if (audioInitialized && masterGainNode.current) {
+      updateMasterVolume(masterVolume);
+    }
+  }, [masterVolume, audioInitialized]);
 
   // Toggle sound play/stop
   const toggleSound = async (id) => {
     // Make sure audio is initialized
-    if (!audioContext) {
+    if (!audioContextRef.current) {
       initAudioContext();
       // If we're just initializing, we'll need a moment to load
       setTimeout(() => toggleSound(id), 500);
@@ -231,8 +292,8 @@ const Dreammixer = () => {
     }
     
     // Resume audio context if suspended (needed for iOS/Chrome)
-    if (audioContext.state === 'suspended') {
-      await audioContext.resume();
+    if (audioContextRef.current.state === 'suspended') {
+      await audioContextRef.current.resume();
     }
     
     setSoundStates(prevStates => 
@@ -290,8 +351,8 @@ const Dreammixer = () => {
           // If changing from zero to a positive value, start playing
           if (newVolume > 0 && !state.playing) {
             // Make sure audio context is running
-            if (audioContext && audioContext.state === 'suspended') {
-              audioContext.resume();
+            if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+              audioContextRef.current.resume();
             }
             
             // Set volume
@@ -326,13 +387,6 @@ const Dreammixer = () => {
   // Handle master volume change
   const handleMasterVolumeChange = (newMasterVolume) => {
     setMasterVolume(newMasterVolume);
-    
-    // Update all currently playing sounds
-    soundStates.forEach(state => {
-      if (state.playing && state.volume > 0) {
-        setSoundVolume(state.id, state.volume);
-      }
-    });
   };
   
   // Turn off all sounds
@@ -360,7 +414,7 @@ const Dreammixer = () => {
     if (!audioInitialized) {
       return "Tap any sound to initialize audio";
     }
-    if (audioContext && audioContext.state === 'suspended') {
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
       return "Audio suspended - tap any sound";
     }
     return null;
@@ -409,6 +463,7 @@ const Dreammixer = () => {
                         ? 'bg-blue-600' 
                         : 'bg-gray-700'
                     }`}
+                    aria-label={`Toggle ${sound.name} sound`}
                   >
                     {sound.icon}
                   </button>
@@ -433,6 +488,7 @@ const Dreammixer = () => {
                 value={volume}
                 onChange={(e) => handleVolumeChange(sound.id, parseInt(e.target.value))}
                 className="w-full mt-1 h-1 appearance-none bg-transparent cursor-pointer"
+                aria-label={`${sound.name} volume control`}
               />
             </div>
           );
@@ -459,6 +515,7 @@ const Dreammixer = () => {
             value={masterVolume}
             onChange={(e) => handleMasterVolumeChange(parseInt(e.target.value))}
             className="w-full h-1 mt-1 appearance-none bg-transparent cursor-pointer"
+            aria-label="Master volume control"
           />
           
           {/* Control Buttons */}
@@ -466,6 +523,7 @@ const Dreammixer = () => {
             <button 
               onClick={turnOffAllSounds}
               className="px-4 py-2 rounded-lg bg-red-900/50 hover:bg-red-700/50 text-white text-sm transition-colors"
+              aria-label="Turn off all sounds"
             >
               Turn Off All Sounds
             </button>
